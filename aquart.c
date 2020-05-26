@@ -22,23 +22,28 @@
 #include <sys/syslog.h>
 
 
-int sendpack(unsigned char* , int , int);
-int recpack(int);
+int sendpack(unsigned char* , int);
+int recpack( unsigned char* , int , int );
+void PrintData (unsigned char* , int);
 
 int main(int argc, char *argv[])
 { 
 
 	int rc;
     int i;
+    int rx_len;
 
-    unsigned char msg_0[20] = {0x10,0x02,0x50,0x00,0x62,0x10,0x03};         // Aquarite SWG PING (or PROBE)
-    int msg_0_len = 7;                                                      // length of message in bytes
+    // receiving buffer
+    unsigned char rx_buffer[255];
 
-    // unsigned char msg_0[20] = {0x01,0x03,0x21,0x01,0x00,0x07,0x5F,0xF4};  //frequency drive RS485 read registers
-
-    unsigned char msg_1[20] = {0x10,0x02,0x50,0x11,0x0a,0x7d,0x10,0x03};    // SWG set % to 10% (0x0a - 5th byte) - change checksum if needed
-    int msg_1_len = 8;                                                      // length of message in bytes
-	    
+    // probe packet
+    // unsigned char msg_0[20] = {0x10,0x02,0x50,0x00,0x62,0x10,0x03};         // Aquarite SWG PING (or PROBE)
+    unsigned char msg_probe[02] = {0x00,0xff}; 
+    // set salt % packet
+    unsigned char msg_setsalt[20] = {0x11,0x01e,0xff}; //,0x10,0x03};    // SWG set % to 10% (0x0a - 5th byte) - change checksum if needed
+    // request device ID packet
+    unsigned char msg_vers[20] = {0x14,0x00,0xff}; //,0x10,0x03};                                                    // length of message in bytes
+    unsigned char msg_test[20] = {0x05,0x20,0x00,0x00,0x01,0xff};
     // ----uart area
     int uart0_filestream = -1;
 
@@ -81,31 +86,72 @@ int main(int argc, char *argv[])
 	printf("sent attrs %d\n",options.c_cflag);
 
     int x;
-    int ret;
 
-    ret = sendpack(msg_0,msg_0_len,uart0_filestream);   // message, its length, and the uart handle
-    if(ret == 1) return 0;
+
+    rc = sendpack(msg_probe,uart0_filestream);   // message, its length, and the uart handle
+    if(rc == 1) return 0;
     usleep(200000);
-    ret = recpack(uart0_filestream);            //uart handle
-    if(ret == 1) return 0;
+    rc = recpack( rx_buffer, rx_len, uart0_filestream); ;            //uart handle
+    if(rc == 3) return 0;
     usleep(10000);
-    ret = sendpack(msg_1,msg_1_len,uart0_filestream);
-    if(ret == 1) return 0;
+    rc = sendpack(msg_vers,uart0_filestream);
+    if(rc == 1) return 0;
     usleep(20000);
-    ret = recpack(uart0_filestream);
+    rc = recpack( rx_buffer, rx_len, uart0_filestream); 
+    if(rc == 3) return 0;
+    // usleep(10000);
+    // for(x=0;x<30;x++) {
+    //     msg_vers[3] = 20 + x;
+    //     msg_vers[5] = 118 + x;
+        // rc = sendpack(msg_vers,uart0_filestream);
+        // if(rc == 1) return 0;
+        // usleep(20000);
+        // rc = recpack( rx_buffer, rx_len, uart0_filestream); 
+        // if(rc == 3) return 0;
+        // sleep(2);
+    // }
 
     return 0;
 
 }
 
-int sendpack(unsigned char* buf, int len, int up)
+int sendpack(unsigned char* buf, int up)
 {
 
     int count = 0;
-    int i,x;
+    int i = 3;
+    int done = 0;
+    int checkval;
+    int len = 0;
+    int x = 0;
+
+    const char pckhdr[3] = {0x10,0x02,0x50};
+    unsigned char packbuild[30];
+
+    checkval = 0x62;
+    memcpy(packbuild,pckhdr,3);
+
+    // build remainder of packet
+    while(done == 0){
+        if(buf[x] == 0xff) { //last byte of packet - to be ignored
+            packbuild[i] = checkval;
+            packbuild[i + 1] = 0x10;
+            packbuild[i + 2] = 0x03;
+            len = i + 3;
+            done = 1;
+        } else {
+            checkval = checkval + buf[x];
+            packbuild[i] = buf[x];
+            x++;
+            i++;
+            if(x > 30) done = 2; //message getting too big must be error
+        }
+    }
+
+    if (done == 2) return 1; //incoming packet was not correct in some regard
 
     for (i=0; i<len; i += count) {
-        count = write(up, buf + i, len - i);
+        count = write(up, packbuild + i, len - i);
         if (count < 0)
             {
                 printf("UART TX error\n");
@@ -113,7 +159,7 @@ int sendpack(unsigned char* buf, int len, int up)
             } else {
                 printf("TX => ");
                 for (x=i;x<(i+count);x++) {
-                    printf("%02x ",buf[x]);
+                    printf("%02x ",packbuild[x]);
                 }
                 printf("\n");
                 return 0;
@@ -122,38 +168,64 @@ int sendpack(unsigned char* buf, int len, int up)
 
 }
 
-int recpack(int up)
+int recpack(unsigned char* buf, int qq, int up)
 {
 
     int rx_length;
-    unsigned char rx_buffer[256];
-    int x;
+    unsigned char rawbuf[256];
+    int done = 0;
 
-    rx_length = read(up, (void*)rx_buffer, 255);		//Filestream, buffer to store in, number of bytes to read (max)
-    if (rx_length < 0)
-    {
-        //An error occured (this may occur if RS485 is not powered)
-        printf("UART RX ERROR\n");
-        return 1;
+    qq = 0;
+    
+    while(done == 0) {
+        rx_length = read(up, (void*)rawbuf, 255);		//Filestream, buffer to store in, number of bytes to read (max)
+
+        if (rx_length < 0)
+        {
+            //An error occured (this may occur if RS485 is not powered)
+            printf("UART RX ERROR\n");
+            done = 3;
+        }
+        else if (rx_length == 0)
+        {
+            //No data waiting
+            done = 1;
+        }
+        else
+        {
+            //Bytes received
+
+            memcpy(&buf[qq],&rawbuf[0],rx_length);
+            qq=qq+rx_length;						
+            usleep(20000);
+        }
     }
-    else if (rx_length == 0)
-    {
-        //No data waiting
-        printf("No data waiting\n");
-        return 2;
-    }
-    else
-    {
-        //Bytes received
-        rx_buffer[rx_length] = '\0';
+
+    if (qq > 0) {
         printf("RX <= ");
-        for (x=0;x < rx_length; x++) {
-            printf("%02x ", rx_buffer[x]);
+        for (int x=0;x < qq; x++) {
+            printf("%02x ", buf[x]);
         }
         printf("\n");
-        return 0;
     }
 
+    return done;
 }
 
-
+void PrintData (unsigned char* data , int Size)
+{
+    unsigned short i;
+     
+    printf("\n");
+    
+    for(i=0 ; i < Size ; i++)
+    {		    	
+        printf(" %02X",(unsigned int)data[i]);
+                     
+        if( i==Size-1)  //print the last spaces
+        {
+			            printf("\n");
+		}
+    }
+    
+}
