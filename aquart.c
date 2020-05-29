@@ -48,7 +48,7 @@ int main(int argc, char *argv[])
     int uart0_filestream = -1;
 
     char devname[20];
-    sprintf(devname, "/dev/serial0");
+    sprintf(devname, "/dev/ttyAMA1");
 
     for (i = 1; i < argc; i++) {
 
@@ -90,13 +90,13 @@ int main(int argc, char *argv[])
 
     rc = sendpack(msg_probe,uart0_filestream);   // message, its length, and the uart handle
     if(rc == 1) return 0;
-    usleep(200000);
+    usleep(500000);
     rc = recpack( rx_buffer, rx_len, uart0_filestream); ;            //uart handle
     if(rc == 3) return 0;
     usleep(10000);
     rc = sendpack(msg_vers,uart0_filestream);
     if(rc == 1) return 0;
-    usleep(20000);
+    usleep(500000);
     rc = recpack( rx_buffer, rx_len, uart0_filestream); 
     if(rc == 3) return 0;
     // usleep(10000);
@@ -197,7 +197,7 @@ int recpack(unsigned char* buf, int qq, int up)
 
             memcpy(&buf[qq],&rawbuf[0],rx_length);
             qq=qq+rx_length;						
-            usleep(20000);
+            done = 1;
         }
     }
 
@@ -207,6 +207,8 @@ int recpack(unsigned char* buf, int qq, int up)
             printf("%02x ", buf[x]);
         }
         printf("\n");
+    } else {
+        printf("No Data Recvd \n");
     }
 
     return done;
